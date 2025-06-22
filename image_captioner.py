@@ -3,15 +3,33 @@ import requests
 import base64
 import re
 
+# 尝试导入 vision_caption（本地 BLIP 模型）
+try:
+    from vision import vision_caption
+    vision_available = True
+except ImportError:
+    vision_available = False
+
 def generate_image_caption(image_path: str, language: str = "zh") -> dict:
     """
     根据图片生成一页幻灯片的说明文字（标题 + 内容）
+    优先使用 vision_caption（本地 BLIP 推理），失败则回退 OpenRouter
     """
-    # 读取并转 Base64
+    # —— 优先使用 vision_caption ——  
+    if vision_available:
+        try:
+            caption = vision_caption(image_path)
+            return {
+                "title": "图片说明" if language == "zh" else "Image",
+                "content": caption[:100]
+            }
+        except Exception as e:
+            st.warning(f"⚠️ 本地图像识别失败，回退至 OpenRouter：{e}")
+
+    # —— 回退：使用 OpenRouter 调用生成描述 ——  
     with open(image_path, "rb") as f:
         img_b64 = base64.b64encode(f.read()).decode()
 
-    # 1. 构造 prompt
     if language == "zh":
         prompt = f"""
 你是一位优秀的 PPT 演讲者。请根据下面的图片（以 Base64 编码给出），撰写一页幻灯片的说明文字：
@@ -45,7 +63,6 @@ Image Base64 (first 500 chars):
 {img_b64[:500]}
 """
 
-    # 2. 调用 OpenRouter
     url = "https://openrouter.ai/api/v1/chat/completions"
     key = st.secrets["openrouter_key"]
     headers = {
@@ -62,9 +79,9 @@ Image Base64 (first 500 chars):
     resp.raise_for_status()
     content = resp.json()["choices"][0]["message"]["content"].strip()
 
-    # 3. 解析输出
+    # —— 解析输出 ——  
     title, desc = (
-        ("图片说明", "") if language == "zh" else ("Image Explanation", "")
+        ("图片说明", "") if language == "zh" else ("Image", "")
     )
     if language == "zh":
         m = re.search(r"标题[:：](.+)\n内容[:：](.+)", content, re.S)

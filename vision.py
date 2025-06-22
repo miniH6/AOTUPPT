@@ -1,12 +1,14 @@
-from transformers import CLIPProcessor, CLIPModel
+from transformers import BlipProcessor, BlipForConditionalGeneration
 from PIL import Image
+import torch
 
-processor=CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
-model=CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+device = "cuda" if torch.cuda.is_available() else "cpu"
+
+processor = BlipProcessor.from_pretrained("Salesforce/blip-image-captioning-base")
+model = BlipForConditionalGeneration.from_pretrained("Salesforce/blip-image-captioning-base").to(device)
 
 def vision_caption(image_path):
-    img=Image.open(image_path)
-    inp=processor(images=img,return_tensors="pt")
-    feat=model.get_image_features(**inp)
-    num=int(feat.norm().item()%10+3)
-    return "图像关键词："+"、".join([f"特征{i}" for i in range(num)])
+    image = Image.open(image_path).convert("RGB")
+    inputs = processor(image, return_tensors="pt").to(device)
+    out = model.generate(**inputs, max_new_tokens=50)
+    return processor.decode(out[0], skip_special_tokens=True)
