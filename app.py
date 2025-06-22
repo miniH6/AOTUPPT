@@ -3,6 +3,12 @@
 import streamlit as st
 import os
 
+# —— 新增：确保临时图片文件夹存在 ——  
+os.makedirs("temp_img", exist_ok=True)
+
+# —— 新增：从 Secret 中读取 OpenRouter Key ——  
+OPENROUTER_KEY = st.secrets["openrouter_key"]
+
 # —— 业务模块 ——  
 from gpt_module import generate_ppt_outline
 from image_captioner import generate_image_caption
@@ -77,19 +83,6 @@ if mode == "🚀 PPT 生成":
     txt_file = st.file_uploader("📄 上传文字文件 (txt/pdf)", type=["txt", "pdf"])
     imgs     = st.file_uploader("🖼️ 上传图片 (可多选)", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
 
-    # —— 独立测试提纲按钮 ——  
-    if st.button("🔍 测试提纲"):
-        # 把上传文本读成字符串
-        text_content = ""
-        if txt_file:
-            raw = txt_file.read()
-            try:
-                text_content = raw.decode("utf-8")
-            except:
-                text_content = raw.decode("gbk", errors="ignore")
-        demo = generate_ppt_outline(task, text_content, [], language)
-        st.json(demo)
-
     # —— 真正生成 PPT ——  
     if st.button("🚀 生成PPT"):
         if not task:
@@ -115,9 +108,6 @@ if mode == "🚀 PPT 生成":
 
                 # 生成 PPT 提纲
                 slides = generate_ppt_outline(task, text, paths, language)
-
-                # 调试：打印提纲列表
-                st.write("📝 调试：slides =", slides)
 
                 # 每张图生成说明页
                 for p in paths:

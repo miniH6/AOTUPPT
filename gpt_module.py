@@ -1,10 +1,13 @@
 # gpt_module.py
 
+import os
 import requests
 import re
 import time
 from requests.exceptions import ChunkedEncodingError, ReadTimeout, HTTPError
 
+# —— 从环境或 Streamlit Secret 读取 Key ——  
+OPENROUTER_KEY = os.getenv("OPENROUTER_KEY")
 
 def call_openrouter(
     prompt: str,
@@ -13,19 +16,15 @@ def call_openrouter(
     max_retries: int = 3,
     timeout: float = 60.0
 ) -> str:
-    """
-    调用 OpenRouter 接口，返回模型输出的纯文本 content。
-    支持超时保护及重试机制，以应对网络断流或超时错误。
-    """
     url = "https://openrouter.ai/api/v1/chat/completions"
     headers = {
-        "Authorization": "Bearer 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",
+        "Authorization": f"Bearer {OPENROUTER_KEY}",
         "Content-Type": "application/json",
     }
     payload = {
         "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": temperature
+        "temperature": temperature,
     }
 
     for attempt in range(1, max_retries + 1):
@@ -35,13 +34,11 @@ def call_openrouter(
             return resp.json()["choices"][0]["message"]["content"]
         except (ChunkedEncodingError, ReadTimeout):
             if attempt < max_retries:
-                time.sleep(1 * attempt)
+                time.sleep(attempt)
                 continue
             raise
         except HTTPError as e:
-            # HTTP 错误不重试
             raise RuntimeError(f"OpenRouter API error: {e}")
-
 
 def generate_ppt_outline(
     task: str,
@@ -49,35 +46,29 @@ def generate_ppt_outline(
     image_paths: list[str],
     language: str = "zh"
 ) -> list[dict]:
-    """
-    输入：主题 task、参考文本 text_content、可选图片路径列表 image_paths。
-    输出：[{"title": str, "content": str}, ...]
-
-    1) 调用 call_openrouter 生成 raw_outline
-    2) 用正则匹配标题和要点; 若无，则使用空行分块兜底
-    3) 再次调用展开要点为段落，并合并较短内容
-    """
-    # 1) 构造大纲 Prompt
+    # 1) 构造初稿大纲 Prompt
     if language == "zh":
         prompt = (
-            "你是一名优秀的 PPT 设计师，只能使用中文输出。" 
-            "请根据下面的主题生成 6~8 页的结构化大纲（每页：标题 + 要点列表）：\n" 
-            f"主题：{task}\n参考文字（前1000字）：{text_content[:1000]}"
+            "你是一名优秀的 PPT 设计师，只能使用中文输出。"
+            "请根据下面的主题生成 6~8 页结构化大纲（每页：标题 + 要点列表）：\n"
+            f"主题：{task}\n"
+            f"参考文字（前1000字）：{text_content[:1000]}"
         )
     else:
         prompt = (
-            "You are an expert PowerPoint designer. Output in English only.\n" 
-            "Based on the topic below, generate a 6–8 slide outline (Title + bullet points):\n" 
-            f"Topic: {task}\nReference text (first 1000 chars): {text_content[:1000]}"
+            "You are an expert PowerPoint designer. Output in English only.\n"
+            "Based on the topic below, generate a 6–8 slide outline (Title + bullet points):\n"
+            f"Topic: {task}\n"
+            f"Reference text (first 1000 chars): {text_content[:1000]}"
         )
 
     raw_outline = call_openrouter(prompt)
 
-    # 2) 解析标题与要点
-    slide_pattern = re.compile(r"^(?:Slide\s*\d+[:：]|幻灯片\s*\d+[:：]|页面\s*\d+[:：])\s*(.+)")
+    # 2) 正则解析标题与要点
+    slide_pattern = re.compile(r"^(?:Slide\s*\d+[:：]|幻灯片\s*\d+[:：]|\d+[\.、])\s*(.+)")
     bullet_pattern = re.compile(r"^(?:[-\*•]|\d+[\.、])\s*(.+)")
 
-    slides_tmp = []
+    slides_tmp: list[dict] = []
     for line in raw_outline.splitlines():
         ln = line.strip()
         if not ln:
@@ -91,7 +82,7 @@ def generate_ppt_outline(
             if m_bullet:
                 slides_tmp[-1]["bullets"].append(m_bullet.group(1).strip())
 
-    # 兜底：若无 slide 标记，则按空行分段
+    # 兜底：若没有任何 slide 标题，则按空行分块
     if not slides_tmp:
         for block in raw_outline.split("\n\n"):
             blk = block.strip()
@@ -106,10 +97,11 @@ def generate_ppt_outline(
                     bullets.append(mb.group(1).strip())
             slides_tmp.append({"title": title, "bullets": bullets})
 
-    # 3) 展开要点 & 合并短内容
+    # 3) 要点展开 & 合并短页
     slides = []
     buffer = {"title": "", "content": ""}
     limit = 300
+
     for item in slides_tmp:
         if not item["bullets"]:
             continue
@@ -118,6 +110,7 @@ def generate_ppt_outline(
             exp_prompt = "请用中文将以下要点展开为一段简洁流畅的幻灯片正文：\n" + pts
         else:
             exp_prompt = "Please expand the following bullet points into a concise slide paragraph:\n" + pts
+
         paragraph = call_openrouter(exp_prompt, temperature=0.6).strip()
         if buffer["content"] and len(buffer["content"]) + len(paragraph) < limit:
             buffer["content"] += "\n" + paragraph
@@ -125,6 +118,7 @@ def generate_ppt_outline(
             if buffer["content"]:
                 slides.append(buffer)
             buffer = {"title": item["title"], "content": paragraph}
+
     if buffer["content"]:
         slides.append(buffer)
 
