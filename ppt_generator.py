@@ -1,5 +1,3 @@
-# ppt_generator.py
-
 from pptx import Presentation
 from pptx.util import Inches, Pt
 from pptx.dml.color import RGBColor
@@ -59,34 +57,30 @@ def create_ppt(
     w, h = prs.slide_width, prs.slide_height
     MAX_CHARS_PER_SLIDE = 400
 
-    for idx, slide in enumerate(slides):
-        is_image = idx >= len(slides) - len(image_paths)
-        layout = 6 if is_image else 1
-        sl = prs.slides.add_slide(prs.slide_layouts[layout])
+    for slide in slides:
+        if "image_path" in slide:
+            # —— 图片页：图 + 简要说明 —— 
+            sl = prs.slides.add_slide(prs.slide_layouts[6])
+            if background:
+                pic = sl.shapes.add_picture(background, 0, 0, width=w, height=h)
+                spTree = sl.shapes._spTree
+                sp = pic._element
+                spTree.remove(sp)
+                spTree.insert(2, sp)
 
-        # —— 背景图：add_picture 然后移到最底层 —— 
-        if background:
-            pic = sl.shapes.add_picture(background, 0, 0, width=w, height=h)
-            # 将背景图元素移动到 spTree 最前面（索引 2 通常是最底层可见元素）
-            spTree = sl.shapes._spTree
-            sp = pic._element
-            spTree.remove(sp)
-            spTree.insert(2, sp)
+            # 标题
+            title_tb = sl.shapes.add_textbox(Inches(0.8), Inches(0.3), w - Inches(1.6), Inches(1))
+            title_tf = title_tb.text_frame
+            title_tf.clear()
+            title_tf.text = slide["title"]
+            set_font(title_tf, title_font, Pt(32), bold=True, align_center=True)
 
-        # —— 标题 textbox —— 
-        title_tb = sl.shapes.add_textbox(Inches(0.8), Inches(0.3), w - Inches(1.6), Inches(1))
-        title_tf = title_tb.text_frame
-        title_tf.clear()
-        title_tf.text = slide["title"]
-        set_font(title_tf, title_font, Pt(32), bold=True, align_center=is_image)
-
-        if is_image:
-            # 图片说明页
-            img_path = image_paths[idx - (len(slides) - len(image_paths))]
-            pic2 = sl.shapes.add_picture(img_path, 0, 0)
+            # 图片
+            pic2 = sl.shapes.add_picture(slide["image_path"], 0, 0)
             pic2.left = int((w - pic2.width) / 2)
-            pic2.top  = int((h - pic2.height) / 2.5)
+            pic2.top = int((h - pic2.height) / 2.5)
 
+            # 简要描述
             body_tb = sl.shapes.add_textbox(Inches(0.8), Inches(5.2), w - Inches(1.6), Inches(2))
             body_tf = body_tb.text_frame
             trimmed = auto_linebreak(slide["content"].strip()[:200], 50)
@@ -94,28 +88,52 @@ def create_ppt(
             body_tf.text = trimmed
             set_font(body_tf, body_font, fit_font_size(trimmed), align_center=False)
 
+            # —— 拓展解释页（可分页） —— 
+            extended_text = slide.get("extended", "").strip()
+            if extended_text:
+                extended_pages = chunk_text(extended_text, max_chars=MAX_CHARS_PER_SLIDE)
+                for i, txt in enumerate(extended_pages):
+                    sl2 = prs.slides.add_slide(prs.slide_layouts[1])
+                    if background:
+                        pic = sl2.shapes.add_picture(background, 0, 0, width=w, height=h)
+                        sp = pic._element
+                        spTree = sl2.shapes._spTree
+                        spTree.remove(sp)
+                        spTree.insert(2, sp)
+
+                    # 标题
+                    tb = sl2.shapes.add_textbox(Inches(0.8), Inches(0.3), w - Inches(1.6), Inches(1))
+                    tf = tb.text_frame
+                    tf.text = slide["title"] + ("（补充说明）" if len(extended_pages) == 1 else f"（补充说明 {i+1}）")
+                    set_font(tf, title_font, Pt(32), bold=True)
+
+                    # 内容
+                    ph = sl2.placeholders[1]
+                    ph.text = auto_linebreak(txt, 60)
+                    set_font(ph.text_frame, body_font, fit_font_size(txt), align_center=False)
+
         else:
-            # 普通内容页，可能分页
+            # —— 普通内容页 —— 
             content = slide["content"].strip()
             pages = chunk_text(content, max_chars=MAX_CHARS_PER_SLIDE)
             for i, txt in enumerate(pages):
-                if i == 0:
-                    cur = sl
-                else:
-                    cur = prs.slides.add_slide(prs.slide_layouts[1])
-                    if background:
-                        pic3 = cur.shapes.add_picture(background, 0, 0, width=w, height=h)
-                        spTree2 = cur.shapes._spTree
-                        sp2 = pic3._element
-                        spTree2.remove(sp2)
-                        spTree2.insert(2, sp2)
-                    tb2 = cur.shapes.add_textbox(Inches(0.8), Inches(0.3), w - Inches(1.6), Inches(1))
-                    tf2 = tb2.text_frame
-                    tf2.clear()
-                    tf2.text = f"{slide['title']}（续）"
-                    set_font(tf2, title_font, Pt(32), bold=True)
+                sl = prs.slides.add_slide(prs.slide_layouts[1])
+                if background:
+                    pic = sl.shapes.add_picture(background, 0, 0, width=w, height=h)
+                    sp = pic._element
+                    spTree = sl.shapes._spTree
+                    spTree.remove(sp)
+                    spTree.insert(2, sp)
 
-                ph = cur.placeholders[1]
+                # 标题
+                title_tb = sl.shapes.add_textbox(Inches(0.8), Inches(0.3), w - Inches(1.6), Inches(1))
+                title_tf = title_tb.text_frame
+                title_tf.clear()
+                title_tf.text = slide["title"] if i == 0 else slide["title"] + "（续）"
+                set_font(title_tf, title_font, Pt(32), bold=True)
+
+                # 内容
+                ph = sl.placeholders[1]
                 ph.text = auto_linebreak(txt, 60)
                 set_font(ph.text_frame, body_font, fit_font_size(txt), align_center=False)
 
