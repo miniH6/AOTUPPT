@@ -1,5 +1,6 @@
 import streamlit as st
 import os
+from gpt_module import call_openrouter
 
 os.makedirs("temp_img", exist_ok=True)
 
