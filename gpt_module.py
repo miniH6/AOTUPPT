@@ -11,6 +11,9 @@ def call_openrouter(
     max_retries: int = 3,
     timeout: float = 60.0
 ) -> str:
+    """
+    统一 GPT 接口
+    """
     url = "https://openrouter.ai/api/v1/chat/completions"
     key = st.secrets["openrouter_key"]
     headers = {
@@ -37,15 +40,6 @@ def call_openrouter(
             raise
 
 
-def enforce_chinese(text: str) -> str:
-    """
-    保证输出为流畅的中文
-    """
-    prompt = f"请将以下文本翻译成流畅自然的中文，不允许输出任何英文：\n\n{text}"
-    translated = call_openrouter(prompt, temperature=0.3)
-    return translated.strip()
-
-
 def generate_ppt_outline(
     task: str,
     text: str,
@@ -54,19 +48,13 @@ def generate_ppt_outline(
     style: str = "正式"
 ) -> list[dict]:
     """
-    style:
-    - 正式
-    - 幽默
-    - 儿童
-    - 新闻播音员
-    - 古风
+    生成 PPT 大纲 + 正文
     """
-
     style_zh = {
         "正式": "正式理性",
         "幽默": "幽默风趣",
         "儿童": "儿童易懂",
-        "新闻播音员": "新闻主播风格",
+        "新闻播音员": "新闻播报",
         "古风": "古代文风"
     }
     style_en = {
@@ -74,34 +62,29 @@ def generate_ppt_outline(
         "humorous": "humorous",
         "child": "child-friendly",
         "news": "news anchor style",
-        "classical": "classical writing"
+        "classical": "classical style"
     }
     style_prompt = style_zh.get(style, "正式理性") if language == "zh" else style_en.get(style, "formal")
 
-    # 优化prompt
+    # 主题
     if language == "zh":
         prompt = (
-            f"你是一名PPT专家，只能用中文回答，风格请使用【{style_prompt}】。"
-            "请务必输出 6~8 页结构化PPT大纲，每页包含标题 + 至少3条要点，"
-            "如果信息不足请自行补充或重复要点以避免空白幻灯片。\n"
+            f"你是一名优秀的 PPT 设计师，请使用【{style_prompt}】风格，只能使用中文输出。"
+            f"请根据下面主题生成 6~8 页结构化大纲（每页：标题 + 要点列表），"
+            f"并且【不要包含任何词汇注释、单词解释、翻译解释，只输出流畅自然的中文段落】：\n"
             f"主题：{task}\n"
             f"参考文字（前1000字）：{text[:1000]}"
         )
     else:
         prompt = (
-            f"You are a PowerPoint expert. Use {style_prompt} style and output strictly in English. "
-            "Generate a 6–8 slide structured outline, each slide with a title and at least 3 bullet points. "
-            "If the topic is too thin, you must fill in with placeholders to avoid empty slides.\n"
+            f"You are a great PowerPoint designer. Please use a {style_prompt} style, output in English only. "
+            f"Based on the topic below, generate a 6–8 slide outline (each slide: Title + bullet points). "
+            f"Do not include any word-level translation, annotation, or explanation, only fluent natural paragraphs:\n"
             f"Topic: {task}\n"
             f"Reference text (first 1000 chars): {text[:1000]}"
         )
 
     raw_outline = call_openrouter(prompt)
-    
-    # 二次保证中文
-    if language == "zh":
-        raw_outline = enforce_chinese(raw_outline)
-
     slides = []
 
     for line in raw_outline.splitlines():
@@ -125,25 +108,20 @@ def generate_ppt_outline(
         pts = "\n".join(s["bullets"])
 
         exp_prompt = (
-            f"请用【{style_prompt}】风格将以下要点展开为一段流畅自然的幻灯片正文，不允许输出任何英文：\n{pts}"
+            f"请用【{style_prompt}】风格将以下要点展开成一段自然流畅的幻灯片正文，"
+            f"并且【禁止包含词汇注释或翻译】，只输出自然段落：\n{pts}"
             if language == "zh"
-            else f"Please expand the following bullet points into a concise slide paragraph in {style_prompt} style:\n{pts}"
+            else f"Please expand the following bullet points into a fluent slide paragraph in {style_prompt} style. "
+                 f"Do not include word explanations or translations:\n{pts}"
         )
         paragraph = call_openrouter(exp_prompt, temperature=0.6).strip()
 
-        # 保证中文
-        if language == "zh":
-            paragraph = enforce_chinese(paragraph)
-
         fact_prompt = (
-            f"请基于这段内容，补充一条可靠的相关数据或事实（来源、人物、时间等），100字内：\n{paragraph}"
+            f"请基于这段幻灯片正文，补充一句可靠的相关知识或数据（来源、时间、人物），不超过100字：\n{paragraph}"
             if language == "zh"
-            else f"Based on this paragraph, add a short factual note or citation in one sentence:\n{paragraph}"
+            else f"Based on this paragraph, add one related factual knowledge or citation (source, data, person) within 1 sentence:\n{paragraph}"
         )
         fact = call_openrouter(fact_prompt, temperature=0.5).strip()
-
-        if language == "zh":
-            fact = enforce_chinese(fact)
 
         enriched = paragraph + ("\n\n📌 " + fact if fact else "")
 
@@ -156,5 +134,4 @@ def generate_ppt_outline(
 
     if buf["content"]:
         merged.append(buf)
-
     return merged
