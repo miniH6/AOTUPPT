@@ -1,27 +1,44 @@
-import pandas as pd
 import matplotlib.pyplot as plt
-from gpt_module import call_openrouter
+import pandas as pd
+import os
+import streamlit as st
+from pptx.util import Inches
+from pptx.enum.shapes import MSO_SHAPE
 
-def generate_chart_slide_from_csv(csv_path: str, language="zh") -> dict:
+from gpt_module import call_openrouter, enforce_chinese
+
+def generate_chart_slide_from_csv(csv_path: str, language: str = "zh") -> dict:
+    """
+    读取 CSV，自动绘制图表，生成PPT可用的幻灯片
+    """
+
+    # 读取
     df = pd.read_csv(csv_path)
-    fig, ax = plt.subplots(figsize=(6, 4))
-    df.plot(ax=ax)
-    fig.tight_layout()
-    chart_path = "temp_img/plot.png"
-    fig.savefig(chart_path)
+
+    # 画图
+    fig, ax = plt.subplots()
+    df.plot(kind="bar", ax=ax)
+    ax.set_title("数据可视化")
+    ax.set_ylabel("数值")
+    ax.set_xlabel("类别")
+    plt.tight_layout()
+
+    # 保存临时图
+    chart_img = "temp_img/chart.png"
+    plt.savefig(chart_img)
     plt.close(fig)
 
-    cols = ", ".join(df.columns)
-    prompt = (
-        f"以下是由列 {cols} 构成的图表，请写一句标题和一句简洁说明总结其主要趋势。"
-        if language == "zh" else
-        f"Given a chart with columns {cols}, write a one-line title and a concise summary of the main trend."
-    )
-    desc = call_openrouter(prompt, temperature=0.5)
+    # 使用 AI 生成图表讲述
+    summary_prompt = f"""
+请根据下述表格数据，用简洁自然的中文总结出图表的主要结论，100字以内，不允许出现“CSV”或“表格”等字眼。
+数据：
+{df.to_string(index=False)}
+"""
+    summary = call_openrouter(summary_prompt, temperature=0.4).strip()
+    summary = enforce_chinese(summary)
 
+    # 返回PPT结构
     return {
-        "title": "数据图表",
-        "content": desc.strip(),
-        "image_path": chart_path,
-        "extended": ""
+        "title": "数据分析结果",
+        "content": summary + "\n\n图表已自动生成。"
     }
