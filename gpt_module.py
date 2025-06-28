@@ -39,6 +39,31 @@ def call_openrouter(
         except HTTPError:
             raise
 
+
+def enforce_chinese(text: str) -> str:
+    """
+    如果文字中中文比例小于 20%，自动请求 GPT 二次翻译成中文
+    并且禁止词汇注释
+    """
+    zh_count = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+    total_count = len(text)
+    ratio = zh_count / total_count if total_count else 0
+
+    if ratio >= 0.2:
+        return text
+
+    # 自动二次翻译
+    prompt = (
+        "请把下面文字完整翻译成自然流畅的中文，"
+        "且不要包含任何单词注释、词汇解释，只要正常中文句子：\n"
+        f"{text}"
+    )
+    # 这里沿用你项目中的 call_openrouter
+    from gpt_module import call_openrouter  
+    translated = call_openrouter(prompt, temperature=0.3)
+    return translated.strip()
+
+
 def generate_ppt_outline(
     task: str,
     text: str,
@@ -47,7 +72,7 @@ def generate_ppt_outline(
     style: str = "正式"
 ) -> list[dict]:
     """
-    生成 PPT 大纲 + 正文
+    生成 PPT 大纲 + 正文 + 幻灯片动画提示
     """
     style_zh = {
         "正式": "正式理性",
@@ -71,22 +96,21 @@ def generate_ppt_outline(
     }
     style_prompt = style_zh.get(style, "正式理性") if language == "zh" else style_en.get(style, "formal")
 
-    # 主题
     if language == "zh":
         prompt = (
             f"你是一名专业 PPT 设计师，请用【{style_prompt}】风格，只用中文输出。"
             f"请为以下主题生成 6~8 页结构化大纲（每页：标题 + 要点列表），"
-            f"不要出现任何词汇注释、翻译、解释，只输出自然流畅文字，"
-            f"并且请为每页推荐一个适合的 PPT 动画效果（如：淡入、飞入、擦除）：\n"
+            f"不要包含词汇解释或翻译，"
+            f"并且每页最后给出一个适合的 PPT 动画效果建议（例如：淡入、擦除、飞入）：\n"
             f"主题：{task}\n"
             f"参考文字（前1000字）：{text[:1000]}"
         )
     else:
         prompt = (
-            f"You are a professional PowerPoint designer. Use a {style_prompt} style, output in English only. "
+            f"You are a professional PowerPoint designer. Use {style_prompt} style, English only. "
             f"Generate a 6–8 slide outline (each slide: Title + bullet points). "
-            f"Do not include word-level translations or explanations, only fluent natural paragraphs, "
-            f"and please recommend one animation for each slide (e.g., fade, fly-in, wipe):\n"
+            f"No word-level translations or explanations, "
+            f"and recommend one animation for each slide (e.g., fade, fly-in, wipe):\n"
             f"Topic: {task}\n"
             f"Reference text (first 1000 chars): {text[:1000]}"
         )
@@ -94,22 +118,20 @@ def generate_ppt_outline(
     raw_outline = call_openrouter(prompt)
     slides = []
 
-    current_animation = None
-
     for line in raw_outline.splitlines():
         line = line.strip()
         if not line:
             continue
-        # 匹配幻灯片标题
         m = re.match(r"^(?:Slide\s*\d+[:：]|幻灯片\s*\d+[:：]|\d+[\.、])\s*(.+)$", line)
         if m:
             slides.append({"title": m.group(1).strip(), "bullets": [], "content": "", "animation": None})
         elif slides and re.match(r"^(?:[-\*•]|\d+[\.、])\s+", line):
             point = re.sub(r"^(?:[-\*•]|\d+[\.、])\s*", "", line).strip()
             slides[-1]["bullets"].append(point)
-        elif "动画" in line or "animation" in line:
-            current_animation = line
+        elif ("动画" in line or "animation" in line) and slides:
+            slides[-1]["animation"] = line.strip()
 
+    # 二次展开
     merged = []
     buf = {"title": "", "content": "", "animation": None}
     char_limit = 300
@@ -123,7 +145,7 @@ def generate_ppt_outline(
             f"请用【{style_prompt}】风格将以下要点展开为流畅自然的幻灯片正文，不要包含词汇注释或翻译：\n{pts}"
             if language == "zh"
             else f"Please expand the following bullet points into a fluent slide paragraph in {style_prompt} style. "
-                 f"Do not include word explanations or translations:\n{pts}"
+                 f"No word explanations or translations:\n{pts}"
         )
         paragraph = call_openrouter(exp_prompt, temperature=0.6).strip()
 
@@ -142,7 +164,7 @@ def generate_ppt_outline(
         else:
             if buf["content"]:
                 merged.append(buf)
-            buf = {"title": s["title"], "content": enriched, "animation": s.get("animation") or current_animation}
+            buf = {"title": s["title"], "content": enriched, "animation": s.get("animation")}
 
     if buf["content"]:
         merged.append(buf)
