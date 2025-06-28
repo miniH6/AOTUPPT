@@ -16,14 +16,10 @@ def fit_font_size(text: str, base_size: int = 20) -> Pt:
         return Pt(base_size - 6)
 
 def auto_linebreak(text: str, maxlen: int = 60) -> str:
-    """
-    优先按句号、问号、感叹号做自然断句，如果句子仍然过长，就强行硬切
-    """
     sents = re.split(r"(。|！|？|\!|\?)", text)
     grouped = ["".join(x) for x in zip(sents[0::2], sents[1::2])]
     if len(sents) % 2 != 0:
         grouped.append(sents[-1])
-
     result = []
     for g in grouped:
         if len(g) <= maxlen:
@@ -31,16 +27,11 @@ def auto_linebreak(text: str, maxlen: int = 60) -> str:
         else:
             forced = [g[i:i+maxlen] for i in range(0, len(g), maxlen)]
             result.extend(forced)
-
     return "\n".join(result)
 
 def chunk_text(text: str, max_chars: int = 400) -> list[str]:
-    """
-    将一整段文字，拆成最多 400 字为一页
-    """
     paras = [p for p in text.split("\n") if p.strip()]
-    pages = []
-    buf = ""
+    pages, buf = [], ""
     for para in paras:
         if len(buf) + len(para) + 1 <= max_chars:
             buf = buf + "\n" + para if buf else para
@@ -57,9 +48,6 @@ def chunk_text(text: str, max_chars: int = 400) -> list[str]:
     return pages
 
 def set_font(text_frame, font_name: str, font_size: Pt = Pt(24), bold: bool = False, align_center: bool = False):
-    """
-    统一设置 PPT 字体
-    """
     for p in text_frame.paragraphs:
         p.alignment = PP_ALIGN.CENTER if align_center else PP_ALIGN.LEFT
         for run in p.runs:
@@ -83,7 +71,6 @@ def create_ppt(
         is_image_slide = "image_path" in slide
 
         if is_image_slide:
-            # 图片页
             sl = prs.slides.add_slide(prs.slide_layouts[6])
             if background:
                 bg = sl.shapes.add_picture(background, 0, 0, width=w, height=h)
@@ -95,7 +82,8 @@ def create_ppt(
             # 标题
             tb_title = sl.shapes.add_textbox(Inches(0.8), Inches(0.3), w - Inches(1.6), Inches(1))
             tf_title = tb_title.text_frame
-            tf_title.text = slide["title"]
+            ani = slide.get("animation", "")
+            tf_title.text = slide["title"] + (f" (推荐动画: {ani})" if ani else "")
             set_font(tf_title, title_font, Pt(32), bold=True, align_center=True)
 
             # 图片
@@ -110,6 +98,10 @@ def create_ppt(
             tf_body.text = desc
             set_font(tf_body, body_font, fit_font_size(desc))
 
+            # 补充备注
+            notes = sl.notes_slide.notes_text_frame
+            notes.text = f"推荐动画：{ani}" if ani else ""
+
             # 补充分页
             extended = slide.get("extended", "").strip()
             if extended:
@@ -123,20 +115,17 @@ def create_ppt(
                         spTree2.remove(sp2)
                         spTree2.insert(2, sp2)
 
-                    # 标题
                     tb2 = sl2.shapes.add_textbox(Inches(0.8), Inches(0.3), w - Inches(1.6), Inches(1))
                     tf2 = tb2.text_frame
                     suffix = f"（补充 {i+1}）" if len(pages) > 1 else "（补充）"
                     tf2.text = slide["title"] + suffix
                     set_font(tf2, title_font, Pt(32), bold=True)
 
-                    # 内容
                     ph = sl2.placeholders[1]
                     ph.text = auto_linebreak(txt, 60)
                     set_font(ph.text_frame, body_font, fit_font_size(txt))
 
         else:
-            # 普通文本页
             content = slide["content"].strip()
             pages = chunk_text(content, MAX_CHARS_PER_SLIDE)
             for i, txt in enumerate(pages):
@@ -148,13 +137,11 @@ def create_ppt(
                     spTree3.remove(sp3)
                     spTree3.insert(2, sp3)
 
-                # 标题
                 tb_title = sl.shapes.add_textbox(Inches(0.8), Inches(0.3), w - Inches(1.6), Inches(1))
                 tf_title = tb_title.text_frame
                 tf_title.text = slide["title"] if i == 0 else f"{slide['title']}（续{ i+1 }）"
                 set_font(tf_title, title_font, Pt(32), bold=True)
 
-                # 内容
                 ph = sl.placeholders[1]
                 ph.text = auto_linebreak(txt, 60)
                 set_font(ph.text_frame, body_font, fit_font_size(txt))

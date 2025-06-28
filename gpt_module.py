@@ -39,7 +39,6 @@ def call_openrouter(
         except HTTPError:
             raise
 
-
 def generate_ppt_outline(
     task: str,
     text: str,
@@ -55,31 +54,39 @@ def generate_ppt_outline(
         "幽默": "幽默风趣",
         "儿童": "儿童易懂",
         "新闻播音员": "新闻播报",
-        "古风": "古代文风"
+        "古风": "古代文风",
+        "商务路演": "商务路演",
+        "TED": "TED风格",
+        "小红书": "小红书口吻"
     }
     style_en = {
         "formal": "formal academic",
         "humorous": "humorous",
         "child": "child-friendly",
         "news": "news anchor style",
-        "classical": "classical style"
+        "classical": "classical style",
+        "business": "business pitch",
+        "TED": "TED talk style",
+        "xiaohongshu": "influencer style"
     }
     style_prompt = style_zh.get(style, "正式理性") if language == "zh" else style_en.get(style, "formal")
 
     # 主题
     if language == "zh":
         prompt = (
-            f"你是一名优秀的 PPT 设计师，请使用【{style_prompt}】风格，只能使用中文输出。"
-            f"请根据下面主题生成 6~8 页结构化大纲（每页：标题 + 要点列表），"
-            f"并且【不要包含任何词汇注释、单词解释、翻译解释，只输出流畅自然的中文段落】：\n"
+            f"你是一名专业 PPT 设计师，请用【{style_prompt}】风格，只用中文输出。"
+            f"请为以下主题生成 6~8 页结构化大纲（每页：标题 + 要点列表），"
+            f"不要出现任何词汇注释、翻译、解释，只输出自然流畅文字，"
+            f"并且请为每页推荐一个适合的 PPT 动画效果（如：淡入、飞入、擦除）：\n"
             f"主题：{task}\n"
             f"参考文字（前1000字）：{text[:1000]}"
         )
     else:
         prompt = (
-            f"You are a great PowerPoint designer. Please use a {style_prompt} style, output in English only. "
-            f"Based on the topic below, generate a 6–8 slide outline (each slide: Title + bullet points). "
-            f"Do not include any word-level translation, annotation, or explanation, only fluent natural paragraphs:\n"
+            f"You are a professional PowerPoint designer. Use a {style_prompt} style, output in English only. "
+            f"Generate a 6–8 slide outline (each slide: Title + bullet points). "
+            f"Do not include word-level translations or explanations, only fluent natural paragraphs, "
+            f"and please recommend one animation for each slide (e.g., fade, fly-in, wipe):\n"
             f"Topic: {task}\n"
             f"Reference text (first 1000 chars): {text[:1000]}"
         )
@@ -87,19 +94,24 @@ def generate_ppt_outline(
     raw_outline = call_openrouter(prompt)
     slides = []
 
+    current_animation = None
+
     for line in raw_outline.splitlines():
         line = line.strip()
         if not line:
             continue
+        # 匹配幻灯片标题
         m = re.match(r"^(?:Slide\s*\d+[:：]|幻灯片\s*\d+[:：]|\d+[\.、])\s*(.+)$", line)
         if m:
-            slides.append({"title": m.group(1).strip(), "bullets": [], "content": ""})
+            slides.append({"title": m.group(1).strip(), "bullets": [], "content": "", "animation": None})
         elif slides and re.match(r"^(?:[-\*•]|\d+[\.、])\s+", line):
             point = re.sub(r"^(?:[-\*•]|\d+[\.、])\s*", "", line).strip()
             slides[-1]["bullets"].append(point)
+        elif "动画" in line or "animation" in line:
+            current_animation = line
 
     merged = []
-    buf = {"title": "", "content": ""}
+    buf = {"title": "", "content": "", "animation": None}
     char_limit = 300
 
     for s in slides:
@@ -108,8 +120,7 @@ def generate_ppt_outline(
         pts = "\n".join(s["bullets"])
 
         exp_prompt = (
-            f"请用【{style_prompt}】风格将以下要点展开成一段自然流畅的幻灯片正文，"
-            f"并且【禁止包含词汇注释或翻译】，只输出自然段落：\n{pts}"
+            f"请用【{style_prompt}】风格将以下要点展开为流畅自然的幻灯片正文，不要包含词汇注释或翻译：\n{pts}"
             if language == "zh"
             else f"Please expand the following bullet points into a fluent slide paragraph in {style_prompt} style. "
                  f"Do not include word explanations or translations:\n{pts}"
@@ -117,7 +128,7 @@ def generate_ppt_outline(
         paragraph = call_openrouter(exp_prompt, temperature=0.6).strip()
 
         fact_prompt = (
-            f"请基于这段幻灯片正文，补充一句可靠的相关知识或数据（来源、时间、人物），不超过100字：\n{paragraph}"
+            f"请基于该幻灯片正文，补充一句可靠相关知识（数据、来源、人名），100字以内：\n{paragraph}"
             if language == "zh"
             else f"Based on this paragraph, add one related factual knowledge or citation (source, data, person) within 1 sentence:\n{paragraph}"
         )
@@ -125,12 +136,13 @@ def generate_ppt_outline(
 
         enriched = paragraph + ("\n\n📌 " + fact if fact else "")
 
+        # 合并逻辑
         if buf["content"] and len(buf["content"]) + len(enriched) < char_limit:
             buf["content"] += "\n" + enriched
         else:
             if buf["content"]:
                 merged.append(buf)
-            buf = {"title": s["title"], "content": enriched}
+            buf = {"title": s["title"], "content": enriched, "animation": s.get("animation") or current_animation}
 
     if buf["content"]:
         merged.append(buf)

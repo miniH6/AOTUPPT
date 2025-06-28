@@ -1,22 +1,18 @@
 import streamlit as st
 import os
-from gpt_module import call_openrouter
+from gpt_module import call_openrouter, generate_ppt_outline
+from image_captioner import generate_image_caption
+from ppt_generator import create_ppt
+from chart_module import generate_chart_slide_from_csv
+
+import speech_recognition as sr
+from gtts import gTTS
+from io import BytesIO
 
 os.makedirs("temp_img", exist_ok=True)
 
 # —— secrets ——  
 OPENROUTER_KEY = st.secrets["openrouter_key"]
-
-# —— 业务模块 ——  
-from gpt_module import generate_ppt_outline
-from image_captioner import generate_image_caption
-from ppt_generator import create_ppt
-from chart_module import generate_chart_slide_from_csv
-
-# —— 语音模块 ——  
-import speech_recognition as sr
-from gtts import gTTS
-from io import BytesIO
 
 # —— firebase（可选） ——  
 firebase_enabled = False
@@ -40,14 +36,18 @@ except ImportError:
 
 # —— Streamlit 配置 ——  
 st.set_page_config(page_title="AutoPPT AI 幻灯片生成器", layout="wide")
+
 st.sidebar.title("🔧 功能导航")
 mode = st.sidebar.radio("请选择功能", [
     "🚀 PPT 生成",
     "🎙️ 语音输入",
     "👥 协作中心",
     "📦 部署指南",
-    "🤖 视觉增强"
+    "📝 PPT二次编辑"
 ])
+
+# 新增：自动配色
+color_style = st.sidebar.selectbox("🎨 配色风格", ["默认", "蓝白", "黑金", "绿色生态"])
 
 # —— PPT 生成 ——  
 if mode == "🚀 PPT 生成":
@@ -56,7 +56,7 @@ if mode == "🚀 PPT 生成":
     lang = st.radio("🌐 请选择语言 / Choose Language", ["中文", "English"])
     language = "zh" if lang == "中文" else "en"
 
-    style = st.selectbox("🗣️ 讲述风格", ["正式", "幽默", "儿童", "新闻播音员", "古风"])
+    style = st.selectbox("🗣️ 讲述风格", ["正式", "幽默", "儿童", "新闻播音员", "古风", "商务路演", "TED", "小红书"])
 
     title_font = st.selectbox("选择标题字体", ["微软雅黑", "宋体", "黑体", "Arial", "Times New Roman"])
     body_font  = st.selectbox("选择正文字体", ["微软雅黑", "宋体", "黑体", "Arial", "Times New Roman"])
@@ -109,28 +109,44 @@ if mode == "🚀 PPT 生成":
                         f.write(im.read())
                     paths.append(p)
 
+                # 生成大纲
                 slides = generate_ppt_outline(task, text, paths, language, style)
 
+                # 为每张图片生成说明
                 for p in paths:
                     slides.append(generate_image_caption(p, language))
 
+                # CSV 转图表
                 if csv_file:
                     csv_path = os.path.join("temp_img", csv_file.name)
                     with open(csv_path, "wb") as f:
                         f.write(csv_file.read())
                     slides.append(generate_chart_slide_from_csv(csv_path, language))
 
+                # PPT
                 out = create_ppt(
                     slides,
                     paths,
                     background=background,
                     title_font=title_font,
-                    body_font=body_font
+                    body_font=body_font,
+                    color_style=color_style
                 )
             st.session_state["slides"] = slides
             st.success("✅ PPT 生成成功！")
             with open(out, "rb") as f:
                 st.download_button("⬇️ 点击下载 PPT", f, file_name="AutoPPT_AI.pptx")
+
+    # 新增：AI纠错
+    if st.button("🧐 AI 检查PPT通顺性"):
+        if "slides" not in st.session_state:
+            st.warning("⚠️ 请先生成一份 PPT 再检查")
+        else:
+            with st.spinner("AI 正在检查幻灯片..."):
+                check_prompt = "请帮我检查以下幻灯片内容是否逻辑合理并指出错别字，仅用中文回复：\n"
+                all_content = "\n\n".join([f"{s['title']}\n{s['content']}" for s in st.session_state["slides"]])
+                check_result = call_openrouter(check_prompt + all_content)
+                st.info(check_result)
 
 # —— 语音输入 ——  
 elif mode == "🎙️ 语音输入":
@@ -194,48 +210,3 @@ COPY . .
 RUN pip install -r requirements.txt
 CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.enableCORS=false"]
                 """)
-# —— 12. 二次编辑 ——  
-elif mode == "📝 PPT二次编辑":
-    st.title("📝 PPT二次编辑 & 智能再创作")
-
-    # 首先检查 session 是否有 slides
-    if "slides" not in st.session_state:
-        st.warning("⚠️ 你需要先在“PPT 生成”模块生成一次 PPT 才能进行二次编辑。")
-    else:
-        slides = st.session_state["slides"]
-
-        st.write("### 当前幻灯片预览")
-        for idx, s in enumerate(slides, start=1):
-            st.markdown(f"**第 {idx} 页：{s['title']}**")
-            st.write(s["content"])
-            st.markdown("---")
-
-        edit_idx = st.number_input("选择需要修改的幻灯片页码 (从1开始)", min_value=1, max_value=len(slides), step=1)
-        new_prompt = st.text_area("请输入新的提示词 (可指定风格/口气/增加要点等)")
-        if st.button("🔁 重新生成选中页"):
-            old_slide = slides[edit_idx - 1]
-            with st.spinner(f"正在重新生成第 {edit_idx} 页..."):
-                # 重新生成该页
-                re_prompt = f"""
-请根据以下 PPT 页的主题重新生成一段正文，风格尽量参考以下提示：
-主题：{old_slide['title']}
-原文：
-{old_slide['content']}
-
-新的提示：
-{new_prompt}
-"""
-                new_content = call_openrouter(re_prompt, temperature=0.7)
-                slides[edit_idx - 1]["content"] = new_content.strip()
-                st.success(f"✅ 第 {edit_idx} 页已更新完成！")
-
-        if st.button("⬇️ 重新下载修改后的 PPT"):
-            out = create_ppt(
-                slides,
-                [],   # 二次编辑暂时不重新传图
-                background=None,
-                title_font="微软雅黑",
-                body_font="微软雅黑"
-            )
-            with open(out, "rb") as f:
-                st.download_button("⬇️ 点击下载修改版 PPT", f, file_name="AutoPPT_Revise.pptx")
