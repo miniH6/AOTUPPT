@@ -1,8 +1,8 @@
-import streamlit as st
 import requests
 import re
 import time
 from requests.exceptions import ChunkedEncodingError, ReadTimeout, HTTPError
+import streamlit as st
 
 def call_openrouter(
     prompt: str,
@@ -11,10 +11,6 @@ def call_openrouter(
     max_retries: int = 3,
     timeout: float = 60.0
 ) -> str:
-    """
-    调用 OpenRouter 接口，返回模型输出的纯文本 content。
-    增加超时和重试机制，以应对断流或超时错误。
-    """
     url = "https://openrouter.ai/api/v1/chat/completions"
     key = st.secrets["openrouter_key"]
     headers = {
@@ -32,40 +28,58 @@ def call_openrouter(
             resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
             resp.raise_for_status()
             return resp.json()["choices"][0]["message"]["content"]
-        except (ChunkedEncodingError, ReadTimeout) as e:
+        except (ChunkedEncodingError, ReadTimeout):
             if attempt < max_retries:
-                time.sleep(attempt)  # 指数退避可调整
+                time.sleep(attempt)
                 continue
             raise
         except HTTPError:
-            # 让调用方看到原始状态码和消息
             raise
 
 def generate_ppt_outline(
     task: str,
     text: str,
     image_paths: list,
-    language: str = "zh"
+    language: str = "zh",
+    style: str = "正式"
 ) -> list[dict]:
     """
-    生成 PPT 提纲：
-      1) 调用 call_openrouter 获取大纲 raw_outline
-      2) 正则匹配标题与要点，构建初步 slides 列表
-      3) 再次调用 OpenRouter 将要点展开为段落，并合并短页面
-    返回格式：[{ "title": ..., "content": ... }, ...]
+    新增 style 参数：
+    可选值如：
+    - "正式"
+    - "幽默"
+    - "儿童"
+    - "新闻播音员"
+    - "古风"
     """
-    # 1. 构造 prompt
+    style_zh = {
+        "正式": "正式理性",
+        "幽默": "幽默风趣",
+        "儿童": "儿童易懂",
+        "新闻播音员": "新闻主播风格",
+        "古风": "古代文风"
+    }
+    style_en = {
+        "formal": "formal academic",
+        "humorous": "humorous",
+        "child": "child-friendly",
+        "news": "news anchor style",
+        "classical": "classical writing"
+    }
+    style_prompt = style_zh.get(style, "正式理性") if language == "zh" else style_en.get(style, "formal")
+
+    # 主题
     if language == "zh":
         prompt = (
-            "你是一名优秀的 PPT 设计师，只能使用中文输出。"
-            "请根据下面主题生成 6~8 页结构化大纲（每页：标题 + 要点列表）：\n"
+            f"你是一名优秀的 PPT 设计师，请使用【{style_prompt}】风格，只能使用中文输出。"
+            f"请根据下面主题生成 6~8 页结构化大纲（每页：标题 + 要点列表）：\n"
             f"主题：{task}\n"
             f"参考文字（前1000字）：{text[:1000]}"
         )
     else:
         prompt = (
-            "You are a great PowerPoint designer. Output in English only."
-            "Based on the topic below, generate a 6–8 slide outline (each slide: Title + bullet points):\n"
+            f"You are a great PowerPoint designer. Please use a {style_prompt} style, output in English only. "
+            f"Based on the topic below, generate a 6–8 slide outline (each slide: Title + bullet points):\n"
             f"Topic: {task}\n"
             f"Reference text (first 1000 chars): {text[:1000]}"
         )
@@ -73,12 +87,10 @@ def generate_ppt_outline(
     raw_outline = call_openrouter(prompt)
     slides = []
 
-    # 2. 解析 raw_outline
     for line in raw_outline.splitlines():
         line = line.strip()
         if not line:
             continue
-        # 匹配标题
         m = re.match(r"^(?:Slide\s*\d+[:：]|幻灯片\s*\d+[:：]|\d+[\.、])\s*(.+)$", line)
         if m:
             slides.append({"title": m.group(1).strip(), "bullets": [], "content": ""})
@@ -86,7 +98,6 @@ def generate_ppt_outline(
             point = re.sub(r"^(?:[-\*•]|\d+[\.、])\s*", "", line).strip()
             slides[-1]["bullets"].append(point)
 
-    # 3. 要点展开并合并
     merged = []
     buf = {"title": "", "content": ""}
     char_limit = 300
@@ -95,20 +106,29 @@ def generate_ppt_outline(
         if not s["bullets"]:
             continue
         pts = "\n".join(s["bullets"])
+
         exp_prompt = (
-            ("请用中文将以下要点展开为一段简洁流畅的幻灯片正文：\n" + pts)
+            f"请用【{style_prompt}】风格将以下要点展开为一段简洁流畅的幻灯片正文：\n{pts}"
             if language == "zh"
-            else ("Please expand the following bullet points into a concise slide paragraph:\n" + pts)
+            else f"Please expand the following bullet points into a concise slide paragraph in {style_prompt} style:\n{pts}"
         )
         paragraph = call_openrouter(exp_prompt, temperature=0.6).strip()
 
-        # 若缓冲区剩余空间足够，合并
-        if buf["content"] and len(buf["content"]) + len(paragraph) < char_limit:
-            buf["content"] += "\n" + paragraph
+        fact_prompt = (
+            f"请基于这段内容，补充一条与主题相关的可靠知识（如来源、数据、人物、时间等），100字内：\n{paragraph}"
+            if language == "zh"
+            else f"Based on this content, add one related factual knowledge or data citation in 1 sentence:\n{paragraph}"
+        )
+        fact = call_openrouter(fact_prompt, temperature=0.5).strip()
+
+        enriched = paragraph + ("\n\n📌 " + fact if fact else "")
+
+        if buf["content"] and len(buf["content"]) + len(enriched) < char_limit:
+            buf["content"] += "\n" + enriched
         else:
             if buf["content"]:
                 merged.append(buf)
-            buf = {"title": s["title"], "content": paragraph}
+            buf = {"title": s["title"], "content": enriched}
 
     if buf["content"]:
         merged.append(buf)

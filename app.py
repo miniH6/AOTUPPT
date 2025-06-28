@@ -1,25 +1,23 @@
-# app.py
-
 import streamlit as st
 import os
 
-# —— 1. 确保临时图片文件夹存在 ——  
 os.makedirs("temp_img", exist_ok=True)
 
-# —— 2. 从本地 .streamlit/secrets.toml 读取 OpenRouter Key ——  
+# —— secrets ——  
 OPENROUTER_KEY = st.secrets["openrouter_key"]
 
-# —— 3. 业务模块 ——  
+# —— 业务模块 ——  
 from gpt_module import generate_ppt_outline
 from image_captioner import generate_image_caption
 from ppt_generator import create_ppt
+from chart_module import generate_chart_slide_from_csv
 
-# —— 4. 语音模块（需 pip install SpeechRecognition pyaudio gTTS） ——  
+# —— 语音模块 ——  
 import speech_recognition as sr
 from gtts import gTTS
 from io import BytesIO
 
-# —— 5. Firebase 多人协作（可选，需要放 firebase_key.json） ——  
+# —— firebase（可选） ——  
 firebase_enabled = False
 if os.path.exists("firebase_key.json"):
     import firebase_admin
@@ -32,14 +30,14 @@ if os.path.exists("firebase_key.json"):
 else:
     st.sidebar.warning("🔒 firebase_key.json 未找到，多人协作已禁用")
 
-# —— 6. 视觉增强（可选，需 pip install transformers torch torchvision Pillow） ——  
+# —— 视觉增强（可选） ——  
 try:
     from vision import vision_caption
     vision_available = True
 except ImportError:
     vision_available = False
 
-# —— 7. Streamlit 布局 & 导航 ——  
+# —— Streamlit 配置 ——  
 st.set_page_config(page_title="AutoPPT AI 幻灯片生成器", layout="wide")
 st.sidebar.title("🔧 功能导航")
 mode = st.sidebar.radio("请选择功能", [
@@ -50,25 +48,20 @@ mode = st.sidebar.radio("请选择功能", [
     "🤖 视觉增强"
 ])
 
-# —— 8. PPT 生成模块 ——  
+# —— PPT 生成 ——  
 if mode == "🚀 PPT 生成":
     st.title("🎯 AutoPPT AI 幻灯片生成器")
 
-    # 语言选择
     lang = st.radio("🌐 请选择语言 / Choose Language", ["中文", "English"])
     language = "zh" if lang == "中文" else "en"
 
-    # 字体设置
+    style = st.selectbox("🗣️ 讲述风格", ["正式", "幽默", "儿童", "新闻播音员", "古风"])
+
     title_font = st.selectbox("选择标题字体", ["微软雅黑", "宋体", "黑体", "Arial", "Times New Roman"])
     body_font  = st.selectbox("选择正文字体", ["微软雅黑", "宋体", "黑体", "Arial", "Times New Roman"])
 
-    # 背景图设置
     st.markdown("### 🎨 背景图设置")
-    bg_opts = {
-        "无背景": None,
-        "简洁蓝色": "backgrounds/blue.jpg",
-        "科技风": "backgrounds/tech.jpg"
-    }
+    bg_opts = {"无背景": None, "简洁蓝色": "backgrounds/blue.jpg", "科技风": "backgrounds/tech.jpg"}
     bg_choice   = st.selectbox("选择内置背景", list(bg_opts.keys()))
     uploaded_bg = st.file_uploader("或上传自定义背景图 (jpg/png)", type=["jpg", "png"])
     if uploaded_bg:
@@ -79,12 +72,11 @@ if mode == "🚀 PPT 生成":
     else:
         background = bg_opts[bg_choice]
 
-    # 任务 & 文件输入
     task     = st.text_input("📝 请输入生成 PPT 的主题与目标", "")
     txt_file = st.file_uploader("📄 上传文字文件 (txt/pdf)", type=["txt", "pdf"])
     imgs     = st.file_uploader("🖼️ 上传图片 (可多选)", type=["jpg", "png", "jpeg"], accept_multiple_files=True)
+    csv_file = st.file_uploader("📊 上传 CSV 数据 (可选)", type=["csv"])
 
-    # —— 调试：测试提纲按钮 ——  
     if st.button("🔍 测试提纲"):
         text_content = ""
         if txt_file:
@@ -93,16 +85,14 @@ if mode == "🚀 PPT 生成":
                 text_content = raw.decode("utf-8")
             except:
                 text_content = raw.decode("gbk", errors="ignore")
-        demo = generate_ppt_outline(task, text_content, [], language)
+        demo = generate_ppt_outline(task, text_content, [], language, style)
         st.json(demo)
 
-    # —— 真正生成 PPT ——  
     if st.button("🚀 生成PPT"):
         if not task:
             st.warning("请输入主题与目标")
         else:
             with st.spinner("✨ 正在生成 PPT，请稍候..."):
-                # 读取文字
                 text = ""
                 if txt_file:
                     raw = txt_file.read()
@@ -111,7 +101,6 @@ if mode == "🚀 PPT 生成":
                     except:
                         text = raw.decode("gbk", errors="ignore")
 
-                # 保存图片到 temp_img
                 paths = []
                 for im in imgs:
                     p = os.path.join("temp_img", im.name)
@@ -119,14 +108,17 @@ if mode == "🚀 PPT 生成":
                         f.write(im.read())
                     paths.append(p)
 
-                # 生成 PPT 提纲
-                slides = generate_ppt_outline(task, text, paths, language)
+                slides = generate_ppt_outline(task, text, paths, language, style)
 
-                # 每张图片生成说明页
                 for p in paths:
                     slides.append(generate_image_caption(p, language))
 
-                # 调用 create_ppt 生成 PPT
+                if csv_file:
+                    csv_path = os.path.join("temp_img", csv_file.name)
+                    with open(csv_path, "wb") as f:
+                        f.write(csv_file.read())
+                    slides.append(generate_chart_slide_from_csv(csv_path, language))
+
                 out = create_ppt(
                     slides,
                     paths,
@@ -134,12 +126,12 @@ if mode == "🚀 PPT 生成":
                     title_font=title_font,
                     body_font=body_font
                 )
-
+            st.session_state["slides"] = slides
             st.success("✅ PPT 生成成功！")
             with open(out, "rb") as f:
                 st.download_button("⬇️ 点击下载 PPT", f, file_name="AutoPPT_AI.pptx")
 
-# —— 9. 语音输入 & 自动配音 ——  
+# —— 语音输入 ——  
 elif mode == "🎙️ 语音输入":
     st.title("🎙️ 语音输入 & 自动配音")
     rec = sr.Recognizer()
@@ -158,7 +150,7 @@ elif mode == "🎙️ 语音输入":
         except Exception as e:
             st.error(f"识别/合成出错：{e}")
 
-# —— 10. 多人协作 ——  
+# —— 多人协作 ——  
 elif mode == "👥 协作中心":
     st.title("👥 多人协作")
     if not firebase_enabled:
@@ -181,19 +173,19 @@ elif mode == "👥 协作中心":
             except Exception as e:
                 st.error(f"Firebase 错误：{e}")
 
-# —— 11. 部署指南 ——  
+# —— 部署指南 ——  
 elif mode == "📦 部署指南":
     st.title("📦 在线部署指南")
     st.markdown("""
 - **Streamlit Cloud**  
-  1. 在 GitHub 新建仓库，并 `git push` 代码  
-  2. 登录 [Streamlit Cloud](https://streamlit.io/cloud)，关联你的仓库，点击 **Deploy**
+  1. GitHub 建库并 `git push`  
+  2. [Streamlit Cloud](https://streamlit.io/cloud) 关联并部署
 
 - **HuggingFace Spaces**  
-  1. 在你的 HuggingFace 账号下创建 Space，选择 **Streamlit** 模板  
-  2. 上传代码，等待部署完成
+  1. 在 HF 创建 Space，选择 Streamlit 模板  
+  2. 上传本项目代码
 
-- **本地 Docker 部署示例**  
+- **本地 Docker**  
 ```dockerfile
 FROM python:3.10-slim
 WORKDIR /app
@@ -201,3 +193,48 @@ COPY . .
 RUN pip install -r requirements.txt
 CMD ["streamlit", "run", "app.py", "--server.port=8501", "--server.enableCORS=false"]
                 """)
+# —— 12. 二次编辑 ——  
+elif mode == "📝 PPT二次编辑":
+    st.title("📝 PPT二次编辑 & 智能再创作")
+
+    # 首先检查 session 是否有 slides
+    if "slides" not in st.session_state:
+        st.warning("⚠️ 你需要先在“PPT 生成”模块生成一次 PPT 才能进行二次编辑。")
+    else:
+        slides = st.session_state["slides"]
+
+        st.write("### 当前幻灯片预览")
+        for idx, s in enumerate(slides, start=1):
+            st.markdown(f"**第 {idx} 页：{s['title']}**")
+            st.write(s["content"])
+            st.markdown("---")
+
+        edit_idx = st.number_input("选择需要修改的幻灯片页码 (从1开始)", min_value=1, max_value=len(slides), step=1)
+        new_prompt = st.text_area("请输入新的提示词 (可指定风格/口气/增加要点等)")
+        if st.button("🔁 重新生成选中页"):
+            old_slide = slides[edit_idx - 1]
+            with st.spinner(f"正在重新生成第 {edit_idx} 页..."):
+                # 重新生成该页
+                re_prompt = f"""
+请根据以下 PPT 页的主题重新生成一段正文，风格尽量参考以下提示：
+主题：{old_slide['title']}
+原文：
+{old_slide['content']}
+
+新的提示：
+{new_prompt}
+"""
+                new_content = call_openrouter(re_prompt, temperature=0.7)
+                slides[edit_idx - 1]["content"] = new_content.strip()
+                st.success(f"✅ 第 {edit_idx} 页已更新完成！")
+
+        if st.button("⬇️ 重新下载修改后的 PPT"):
+            out = create_ppt(
+                slides,
+                [],   # 二次编辑暂时不重新传图
+                background=None,
+                title_font="微软雅黑",
+                body_font="微软雅黑"
+            )
+            with open(out, "rb") as f:
+                st.download_button("⬇️ 点击下载修改版 PPT", f, file_name="AutoPPT_Revise.pptx")
