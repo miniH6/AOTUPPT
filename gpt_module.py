@@ -11,9 +11,6 @@ def call_openrouter(
     max_retries: int = 3,
     timeout: float = 60.0
 ) -> str:
-    """
-    统一 GPT 接口
-    """
     url = "https://openrouter.ai/api/v1/chat/completions"
     key = st.secrets["openrouter_key"]
     headers = {
@@ -25,7 +22,6 @@ def call_openrouter(
         "messages": [{"role": "user", "content": prompt}],
         "temperature": temperature,
     }
-
     for attempt in range(1, max_retries + 1):
         try:
             resp = requests.post(url, headers=headers, json=payload, timeout=timeout)
@@ -39,30 +35,26 @@ def call_openrouter(
         except HTTPError:
             raise
 
-
-def enforce_chinese(text: str) -> str:
+def enforce_language(text: str, language: str) -> str:
     """
-    如果文字中中文比例小于 20%，自动请求 GPT 二次翻译成中文
-    并且禁止词汇注释
+    如果语言模式是中文/英文，但结果不符，则二次翻译
     """
     zh_count = sum(1 for c in text if '\u4e00' <= c <= '\u9fff')
+    en_count = sum(1 for c in text if ('a' <= c.lower() <= 'z'))
     total_count = len(text)
-    ratio = zh_count / total_count if total_count else 0
 
-    if ratio >= 0.2:
-        return text
-
-    # 自动二次翻译
-    prompt = (
-        "请把下面文字完整翻译成自然流畅的中文，"
-        "且不要包含任何单词注释、词汇解释，只要正常中文句子：\n"
-        f"{text}"
-    )
-    # 这里沿用你项目中的 call_openrouter
-    from gpt_module import call_openrouter  
-    translated = call_openrouter(prompt, temperature=0.3)
-    return translated.strip()
-
+    if language == "zh":
+        ratio = zh_count / total_count if total_count else 0
+        if ratio >= 0.2:
+            return text
+        prompt = f"请把下面文字完整翻译成自然流畅的中文，且禁止任何词汇注释或解释，只输出正常句子：\n{text}"
+        return call_openrouter(prompt, temperature=0.3).strip()
+    else:
+        ratio = en_count / total_count if total_count else 0
+        if ratio >= 0.2:
+            return text
+        prompt = f"Please translate the following text into fluent natural English, no word-level explanation, just clean sentences:\n{text}"
+        return call_openrouter(prompt, temperature=0.3).strip()
 
 def generate_ppt_outline(
     task: str,
@@ -71,9 +63,6 @@ def generate_ppt_outline(
     language: str = "zh",
     style: str = "正式"
 ) -> list[dict]:
-    """
-    生成 PPT 大纲 + 正文 + 幻灯片动画提示
-    """
     style_zh = {
         "正式": "正式理性",
         "幽默": "幽默风趣",
@@ -100,14 +89,14 @@ def generate_ppt_outline(
         prompt = (
             f"你是一名专业 PPT 设计师，请用【{style_prompt}】风格，只用中文输出。"
             f"请为以下主题生成 6~8 页结构化大纲（每页：标题 + 要点列表），"
-            f"不要包含词汇解释或翻译，"
-            f"并且每页最后给出一个适合的 PPT 动画效果建议（例如：淡入、擦除、飞入）：\n"
+            f"且禁止出现任何单词注释或解释，"
+            f"并为每页给出一个 PPT 动画效果建议（例如：淡入、擦除、飞入）：\n"
             f"主题：{task}\n"
             f"参考文字（前1000字）：{text[:1000]}"
         )
     else:
         prompt = (
-            f"You are a professional PowerPoint designer. Use {style_prompt} style, English only. "
+            f"You are a professional PowerPoint designer. Use {style_prompt} style, output in English only. "
             f"Generate a 6–8 slide outline (each slide: Title + bullet points). "
             f"No word-level translations or explanations, "
             f"and recommend one animation for each slide (e.g., fade, fly-in, wipe):\n"
@@ -116,8 +105,9 @@ def generate_ppt_outline(
         )
 
     raw_outline = call_openrouter(prompt)
-    slides = []
+    raw_outline = enforce_language(raw_outline, language)
 
+    slides = []
     for line in raw_outline.splitlines():
         line = line.strip()
         if not line:
@@ -131,7 +121,6 @@ def generate_ppt_outline(
         elif ("动画" in line or "animation" in line) and slides:
             slides[-1]["animation"] = line.strip()
 
-    # 二次展开
     merged = []
     buf = {"title": "", "content": "", "animation": None}
     char_limit = 300
@@ -142,23 +131,24 @@ def generate_ppt_outline(
         pts = "\n".join(s["bullets"])
 
         exp_prompt = (
-            f"请用【{style_prompt}】风格将以下要点展开为流畅自然的幻灯片正文，不要包含词汇注释或翻译：\n{pts}"
+            f"请用【{style_prompt}】风格将以下要点展开为流畅自然的幻灯片正文，禁止词汇注释或翻译：\n{pts}"
             if language == "zh"
             else f"Please expand the following bullet points into a fluent slide paragraph in {style_prompt} style. "
-                 f"No word explanations or translations:\n{pts}"
+                 f"No word-level explanations or translations:\n{pts}"
         )
         paragraph = call_openrouter(exp_prompt, temperature=0.6).strip()
+        paragraph = enforce_language(paragraph, language)
 
         fact_prompt = (
-            f"请基于该幻灯片正文，补充一句可靠相关知识（数据、来源、人名），100字以内：\n{paragraph}"
+            f"请为该段幻灯片正文补充一句可靠相关知识（来源、时间、人名），100字以内：\n{paragraph}"
             if language == "zh"
-            else f"Based on this paragraph, add one related factual knowledge or citation (source, data, person) within 1 sentence:\n{paragraph}"
+            else f"Based on this paragraph, add one relevant factual knowledge (source, data, person) in one sentence:\n{paragraph}"
         )
         fact = call_openrouter(fact_prompt, temperature=0.5).strip()
+        fact = enforce_language(fact, language)
 
         enriched = paragraph + ("\n\n📌 " + fact if fact else "")
 
-        # 合并逻辑
         if buf["content"] and len(buf["content"]) + len(enriched) < char_limit:
             buf["content"] += "\n" + enriched
         else:
