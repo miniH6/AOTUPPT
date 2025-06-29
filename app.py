@@ -47,7 +47,7 @@ mode = st.sidebar.radio("请选择功能", [
 ])
 
 # 新增：自动配色
-color_style = st.sidebar.selectbox("🎨 配色风格", ["默认", "蓝白", "黑金", "绿色生态"])
+color_style = st.sidebar.selectbox("🎨 配色风格", ["默认", "蓝色", "红色", "绿色"])
 
 # —— PPT 生成 ——  
 if mode == "🚀 PPT 生成":
@@ -109,21 +109,17 @@ if mode == "🚀 PPT 生成":
                         f.write(im.read())
                     paths.append(p)
 
-                # 生成大纲
                 slides = generate_ppt_outline(task, text, paths, language, style)
 
-                # 为每张图片生成说明
                 for p in paths:
                     slides.append(generate_image_caption(p, language))
 
-                # CSV 转图表
                 if csv_file:
                     csv_path = os.path.join("temp_img", csv_file.name)
                     with open(csv_path, "wb") as f:
                         f.write(csv_file.read())
                     slides.append(generate_chart_slide_from_csv(csv_path, language))
 
-                # PPT
                 out = create_ppt(
                     slides,
                     paths,
@@ -137,7 +133,7 @@ if mode == "🚀 PPT 生成":
             with open(out, "rb") as f:
                 st.download_button("⬇️ 点击下载 PPT", f, file_name="AutoPPT_AI.pptx")
 
-    # 新增：AI纠错
+    # AI 通顺性检查
     if st.button("🧐 AI 检查PPT通顺性"):
         if "slides" not in st.session_state:
             st.warning("⚠️ 请先生成一份 PPT 再检查")

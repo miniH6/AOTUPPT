@@ -47,25 +47,35 @@ def chunk_text(text: str, max_chars: int = 400) -> list[str]:
         pages.append(buf)
     return pages
 
-def set_font(text_frame, font_name: str, font_size: Pt = Pt(24), bold: bool = False, align_center: bool = False):
+def set_font(text_frame, font_name: str, font_size: Pt = Pt(24), bold: bool = False, align_center: bool = False, font_color: RGBColor = RGBColor(0,0,0)):
     for p in text_frame.paragraphs:
         p.alignment = PP_ALIGN.CENTER if align_center else PP_ALIGN.LEFT
         for run in p.runs:
             run.font.name = font_name
             run.font.size = font_size
             run.font.bold = bold
-            run.font.color.rgb = RGBColor(0, 0, 0)
+            run.font.color.rgb = font_color
 
 def create_ppt(
     slides: list[dict],
     image_paths: list[str],
     background: str | None = None,
     title_font: str = "微软雅黑",
-    body_font: str = "微软雅黑"
+    body_font: str = "微软雅黑",
+    color_style: str = "默认"
 ) -> str:
     prs = Presentation()
     w, h = prs.slide_width, prs.slide_height
     MAX_CHARS_PER_SLIDE = 400
+
+    # 配色
+    color_map = {
+        "默认": RGBColor(0,0,0),
+        "蓝白": RGBColor(0,0,0),
+        "黑金": RGBColor(218,165,32),
+        "绿色生态": RGBColor(0,128,0)
+    }
+    font_color = color_map.get(color_style, RGBColor(0,0,0))
 
     for slide in slides:
         is_image_slide = "image_path" in slide
@@ -79,30 +89,25 @@ def create_ppt(
                 spTree.remove(sp)
                 spTree.insert(2, sp)
 
-            # 标题
             tb_title = sl.shapes.add_textbox(Inches(0.8), Inches(0.3), w - Inches(1.6), Inches(1))
             tf_title = tb_title.text_frame
             ani = slide.get("animation", "")
             tf_title.text = slide["title"] + (f" (推荐动画: {ani})" if ani else "")
-            set_font(tf_title, title_font, Pt(32), bold=True, align_center=True)
+            set_font(tf_title, title_font, Pt(32), bold=True, align_center=True, font_color=font_color)
 
-            # 图片
             pic = sl.shapes.add_picture(slide["image_path"], 0, 0)
             pic.left = int((w - pic.width) / 2)
             pic.top = int((h - pic.height) / 2.5)
 
-            # 简述
             tb_body = sl.shapes.add_textbox(Inches(0.8), Inches(5.2), w - Inches(1.6), Inches(2))
             tf_body = tb_body.text_frame
             desc = auto_linebreak(slide["content"].strip()[:200], 50)
             tf_body.text = desc
-            set_font(tf_body, body_font, fit_font_size(desc))
+            set_font(tf_body, body_font, fit_font_size(desc), font_color=font_color)
 
-            # 补充备注
             notes = sl.notes_slide.notes_text_frame
             notes.text = f"推荐动画：{ani}" if ani else ""
 
-            # 补充分页
             extended = slide.get("extended", "").strip()
             if extended:
                 pages = chunk_text(extended, MAX_CHARS_PER_SLIDE)
@@ -119,11 +124,11 @@ def create_ppt(
                     tf2 = tb2.text_frame
                     suffix = f"（补充 {i+1}）" if len(pages) > 1 else "（补充）"
                     tf2.text = slide["title"] + suffix
-                    set_font(tf2, title_font, Pt(32), bold=True)
+                    set_font(tf2, title_font, Pt(32), bold=True, font_color=font_color)
 
                     ph = sl2.placeholders[1]
                     ph.text = auto_linebreak(txt, 60)
-                    set_font(ph.text_frame, body_font, fit_font_size(txt))
+                    set_font(ph.text_frame, body_font, fit_font_size(txt), font_color=font_color)
 
         else:
             content = slide["content"].strip()
@@ -140,11 +145,11 @@ def create_ppt(
                 tb_title = sl.shapes.add_textbox(Inches(0.8), Inches(0.3), w - Inches(1.6), Inches(1))
                 tf_title = tb_title.text_frame
                 tf_title.text = slide["title"] if i == 0 else f"{slide['title']}（续{ i+1 }）"
-                set_font(tf_title, title_font, Pt(32), bold=True)
+                set_font(tf_title, title_font, Pt(32), bold=True, font_color=font_color)
 
                 ph = sl.placeholders[1]
                 ph.text = auto_linebreak(txt, 60)
-                set_font(ph.text_frame, body_font, fit_font_size(txt))
+                set_font(ph.text_frame, body_font, fit_font_size(txt), font_color=font_color)
 
     out = "AutoPPT_AI.pptx"
     prs.save(out)
