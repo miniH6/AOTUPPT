@@ -2,28 +2,37 @@ import streamlit as st
 import requests
 import base64
 
-# 尝试导入本地BLIP
+# 尝试导入 vision_caption（本地 BLIP 模型）
 try:
     from vision import vision_caption
     vision_available = True
 except ImportError:
     vision_available = False
 
-from gpt_module import call_openrouter, enforce_language
+from gpt_module import call_openrouter  # 引入统一的 OpenRouter
 
 def generate_image_caption(image_path: str, language: str = "zh") -> dict:
     """
-    根据图片生成一页幻灯片说明文字
+    根据图片生成幻灯片说明文字
+    返回：
+    {
+        "title": ...,
+        "content": ...,
+        "extended": ...,
+        "image_path": ...,
+        "animation": ...
+    }
     """
-    # —— 1. BLIP 优先 ——  
+
+    # —— 1. 优先 BLIP ——  
     caption = None
     if vision_available:
         try:
             caption = vision_caption(image_path)
         except Exception as e:
-            st.warning(f"⚠️ 本地图像识别失败，退回大模型：{e}")
+            st.warning(f"⚠️ 本地图像识别失败，改用大模型：{e}")
 
-    # —— 2. 大模型识别 ——  
+    # —— 2. 如果失败用大模型 ——  
     if not caption:
         with open(image_path, "rb") as f:
             img_b64 = base64.b64encode(f.read()).decode()
@@ -50,12 +59,11 @@ You are a professional PowerPoint presenter. Based on the following Base64 image
 
 Base64 (first 500 chars): {img_b64[:500]}
 """
-        caption = call_openrouter(prompt, temperature=0.5).strip()
+        caption = call_openrouter(prompt, temperature=0.5)
 
-    # 自动检查语言
-    caption = enforce_language(caption.strip(), language)
+    caption = caption.strip()
 
-    # —— 3. 拓展说明 ——  
+    # —— 3. 生成拓展说明 ——  
     if language == "zh":
         ext_prompt = f"""
 请将以下简要说明扩展成一段流畅的 PPT 演讲文字，约 200~300 字：
@@ -67,7 +75,6 @@ Please expand the following caption into a fluent presentation paragraph (~150�
 {caption}
 """
     extended = call_openrouter(ext_prompt, temperature=0.6).strip()
-    extended = enforce_language(extended, language)
 
     # —— 4. 自动推荐动画 ——  
     ani_prompt = (
@@ -76,15 +83,14 @@ Please expand the following caption into a fluent presentation paragraph (~150�
         else f"Based on the following caption, suggest one PowerPoint animation (e.g. fly-in, fade, zoom), only return animation name:\n{caption}"
     )
     animation = call_openrouter(ani_prompt, temperature=0.3).strip()
-    animation = enforce_language(animation, language)
 
     # —— 5. 标题 ——  
     title = "图片说明" if language == "zh" else "Image Description"
 
     return {
         "title": title,
-        "content": caption[:100],       # 底部简要
-        "extended": extended,           # 讲解
+        "content": caption[:100],       # 图页底部简要
+        "extended": extended,           # 拓展页正文
         "image_path": image_path,
         "animation": animation
     }

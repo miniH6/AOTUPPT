@@ -36,7 +36,7 @@ def generate_chart_slide_from_csv(csv_path: str, language: str = "zh") -> dict:
 并请推荐适合该图表在 PPT 中使用的动画效果（如：飞入、放大）。
 """
     summary = call_openrouter(summary_prompt, temperature=0.4).strip()
-    summary = enforce_chinese(summary)
+    summary = enforce_language(summary)
 
     # 从 GPT 返回里提取动画
     animation = "无"
