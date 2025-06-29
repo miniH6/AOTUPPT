@@ -5,7 +5,7 @@ import streamlit as st
 from pptx.util import Inches
 from pptx.enum.shapes import MSO_SHAPE
 
-from gpt_module import call_openrouter, enforce_chinese
+from gpt_module import call_openrouter, enforce_language
 
 def generate_chart_slide_from_csv(csv_path: str, language: str = "zh") -> dict:
     """
